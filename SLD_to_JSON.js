@@ -1,6 +1,7 @@
-var us = require('underscore');
+var _ = require('underscore');
 var util = require('util');
 var path = require('path');
+var async = require('async');
 var parseString = require('xml2js').parseString;
 var fs = require('fs');
 var xml2js = require('xml2js');
@@ -12,8 +13,8 @@ var nrParsed = 0; //Nr of parsed files so far
 //-----------------------TODO-------------------------------------
 //ADD YOUR SPECIFIC INFO HERE BEFORE RUNNING THE CODE:
 var styleSpecName = 'MapboxGLStyle2';//choose the name you want
-var sourceName = ''; //name of source for the tiles you want the style specification to apply for
-var sourceUrl = ''; //URL to the tileJSON resource
+var sourceName = 'os_mm'; //name of source for the tiles you want the style specification to apply for
+var sourceUrl = 'https://api.landinsight.io/maps/os-mm/'; //URL to the tileJSON resource
 var type = 'vector';//vector, raster, GeoJSON ++
 
 
@@ -23,12 +24,23 @@ var type = 'vector';//vector, raster, GeoJSON ++
 //Comment out the one you don't want
 
 //add path for directory where all files you want to convert are placed
-var DIRECTORY_PATH = 'exampleMultipleLayers';
+//ONLY READS FILES WITH THE .sld EXTENSION
+//var DIRECTORY_PATH = '~/LandTech/os-mm-styles';
+var DIRECTORY_PATH = '../os-mm-styles-test';
+//var DIRECTORY_PATH = 'exampleMultipleLayers';
 
-parseAllFiles(DIRECTORY_PATH); //parse all files in given directory
+var finish = function(err) {
+  console.log("Finished");
+  if (err) {
+    console.log("Error:");
+    console.log(err);
+  }
+};
+
+parseAllFiles(DIRECTORY_PATH, finish); //parse all files in given directory
 
 var SPECIFIC_FILE_PATH = 'exampleData/FKB_ElvBekk.xml'; //path of specific file
-//parse_sld_to_rules_tag(SPECIFIC_FILE_PATH); //Parse only one file
+//parseSingleFile(SPECIFIC_FILE_PATH, finish); //Parse only one file
 
 
 //-------------------------------------------------------------//
@@ -178,105 +190,132 @@ function scale_to_zoom(scale) {
   return 20;
 }
 
-function parseAllFiles(path) {
-  fs.readdir(path, function (error, list) {
-    if (error) {
-      console.log('error');
-      return error;
+function parseAllFiles(filePath, callback) {
+  async.waterfall([
+    function(cb) {
+      writeStartOfJSON(cb);
+    },
+    function(cb) {
+      fs.readdir(filePath, cb);
+    }, 
+    function(list, cb) {
+      async.eachSeries(list, function(fileName, eachCb) {
+        if (path.extname(fileName) === '.sld') {
+          parse_sld_to_rules_tag(filePath + '/' + fileName, eachCb);
+        } else {
+          eachCb();
+        }
+      }, cb);
+    },
+    function(cb) {
+      writeEndOfJSON(cb);
     }
-    var filelist = [];
-    for (var variable of list) {
-      filelist.push(variable);
-    }
-    var i;
-    nrToParse = filelist.length;
-    for (var i = 0; i < filelist.length; i++) {
-      parse_sld_to_rules_tag(path + '/' + filelist[i]);
-    }
-  });
+  ], callback);
+}
 
-  setTimeout(function () {
-    //not sure what time will be sufficent in large datasets
-  }, 5000);
+function parseSingleFile(file, callback) {
+  async.waterfall([
+    function(cb) {
+      writeStartOfJSON(cb);
+    },
+    function(cb) {
+      parse_sld_to_rules_tag(file, cb);
+    },
+    function(cb) {
+      writeEndOfJSON(cb);
+    }
+  ], callback);
 }
 
 //parses the xml and finds symbolizer-element and type
-function parse_sld_to_rules_tag(file) {
-  fs.readFile(file, function (err, data) {
-    if (err) {
-      console.log(err);
+function parse_sld_to_rules_tag(file, callback) {
+  async.waterfall([
+    function(cb) {
+      fs.readFile(file, function (err, data) {
+        if (err) {
+          console.log(err);
+        }
+        cb(err, data);
+      });
+    }, 
+    function(data, cb) {
+      parseFile(data, file, cb);
     }
-    parseFile(data, file);
-  });
-  nrParsed++;
-  if (nrParsed === nrToParse) {
-    //TODO: Find a way to remove the timeout? Problem is that there is no way to
-    //know how many layers will be written to the result json
-    //and you can therefor not do a check if the last is written or not.
-    //You cannot send a callback since it should only be written the last time.
-    setTimeout(function () {
-      writeEndOfJSON();
-    }, 500);
-  }
+  ], callback);
 }
 
-function writeStartOfJSON() {
+function writeStartOfJSON(callback) {
   var top = '{ "version": 7, "name": "' + styleSpecName + '", "sources": { "' + sourceName + '": { "type": "vector", "url": "' + sourceUrl + '" } }, "glyphs": "mapbox://fontstack/{fontstack}/{range}.pbf", "sprite": "https://www.mapbox.com/mapbox-gl-styles/sprites/sprite", "layers": [ { "id": "background", "type": "background", "paint": { "background-color": "rgb(237, 234, 235)" } }';
   //  var top = '{ "version": 7, "name": "MapboxGLStyle2", "sources": { "norkart": { "type": "vector", "url": "mapbox://andersob.3ukdquxr" } }, "glyphs": "mapbox://fontstack/{fontstack}/{range}.pbf", "sprite": "https://www.mapbox.com/mapbox-gl-styles/sprites/sprite", "layers": [ { "id": "background", "type": "background", "paint": { "background-color": "rgb(237, 234, 235)" } }';
-  fs.writeFile(RESULT_PATH + '\\Result.JSON', top + '\n');
-  fs.writeFile(RESULT_PATH + '\\errorFiles.txt', 'Files that could not be converted:' + '\n');
+  async.waterfall([
+    function(cb) {
+      fs.writeFile(RESULT_PATH + '\Result.JSON', top + '\n', cb);
+    },
+    function(cb) {
+      fs.writeFile(RESULT_PATH + '\errorFiles.txt', 'Files that could not be converted:' + '\n', cb);
+    }
+  ], function(err) {
+    callback(err);
+  });
 }
 
-function writeEndOfJSON() {
+function writeEndOfJSON(callback) {
   console.log('writing end of json');
   var end = ']}';
-  fs.appendFile(RESULT_PATH + '\\Result.JSON', end);
+  fs.appendFile(RESULT_PATH + '\Result.JSON', end, callback);
 }
 
-var parseFile = function (data, file) {
-  writeStartOfJSON();
-  parser.parseString(data, function (err, result) {
-    var FeatureTypeStyle = result.StyledLayerDescriptor.NamedLayer[0].UserStyle[0].FeatureTypeStyle;
-    var rulesArr = [];
-    var k;
-    var rules = [];
-    for (k = 0; k < FeatureTypeStyle.length; k++) { //some files had more than one FeatureTypeStyle
-      var rulesVer = (FeatureTypeStyle[k].Rule);
-      var rule;
-      for (rule = 0; rule < rulesVer.length; rule++) {
-        //pushes all rules-tag in different FeatureTypeStyle-tags to one array
-        rules.push(rulesVer[rule]);
-      }
-    }
-    var j;
-    var maxzoom;
-    var minzoom;
-    for (j = 0; j < rules.length; j++) {
-      rule = rules[j];
-      name = rule.Name[0];
-      maxzoom = scale_to_zoom(rule.MaxScaleDenominator[0]);
-      minzoom = scale_to_zoom(rule.MinScaleDenominator[0]);
-      //Checks if the tag is valid, and if it is: saves the object and type-name
-      var i;
-      var ruleArray = Object.keys(rule);
-      for (i = 0; i < ruleArray.length; i++) {
-        if ((VALID_SYMBOLIZERS.indexOf(ruleArray[i])) > -1) {
-          //Sends object, symbolizer and filename
-          writeJSON(rule[ruleArray[i]], ruleArray[i], name, minzoom, maxzoom, file);
+var parseFile = function (data, file, callback) {
+  async.waterfall([
+    function(cb) {
+      parser.parseString(data, function (err, result) {
+        var FeatureTypeStyle = result.StyledLayerDescriptor.NamedLayer[0].UserStyle[0].FeatureTypeStyle;
+        var rulesArr = [];
+        var k;
+        var rules = [];
+        for (k = 0; k < FeatureTypeStyle.length; k++) { //some files had more than one FeatureTypeStyle
+          var rulesVer = (FeatureTypeStyle[k].Rule);
+          var rule;
+          for (rule = 0; rule < rulesVer.length; rule++) {
+            //pushes all rules-tag in different FeatureTypeStyle-tags to one array
+            rules.push(rulesVer[rule]);
+          }
         }
-      }
+        cb(err, rules);
+      });
+    },
+    function(rules, cb) {
+      var dataToWrite = rules.reduce(function(curr, rule) {
+        var name = rule.Name[0];
+        var maxzoom = scale_to_zoom(rule.MaxScaleDenominator[0]);
+        var minzoom = scale_to_zoom(rule.MinScaleDenominator[0]);
+        _.each(rule, function(val, key) {
+          if ((VALID_SYMBOLIZERS.indexOf(key)) > -1) {
+            //Sends object, symbolizer and filename
+            curr.push([val, key, name, minzoom, maxzoom, file]);
+          }
+        });
+        return curr;
+      }, []);
+
+
+      async.eachSeries(dataToWrite, function(data, eachCb) {
+        data.push(eachCb);
+        writeJSON.apply(this, data);
+      }, cb);
     }
-  });
+  ], callback);
 };
 
 
 //called for each symbolizer
 //this runs the rest of the methods through make_JSON and so on, and writes the objects to file
-function writeJSON(symbTag, type, name, minzoom, maxzoom, file) {
+function writeJSON(symbTag, type, name, minzoom, maxzoom, file, callback) {
   var errorFiles = [];
   var convType = convertType(type);
   try {
     var cssObj = getSymbolizersObj(symbTag, type, file);
+    var toWrite = [];
     //if css-obj contains both fill and stroke, you have to split them into two layers
     if (cssObj['fill-color'] !== undefined && cssObj['line-color'] !== undefined) {
       var attPos = (Object.keys(cssObj)).indexOf('line-color');
@@ -294,16 +333,20 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, file) {
       var print1 = JSON.stringify(styleObj1, null, 4);
       var print2 = JSON.stringify(styleObj2, null, 4);
       console.log('Writing converted');
-      fs.appendFile(RESULT_PATH + '\\Result.JSON', ',\n' + print1);
-      fs.appendFile(RESULT_PATH + '\\Result.JSON', ',\n' + print2);
+      toWrite.push(',\n' + print1);
+      toWrite.push(',\n' + print2);
     } else {
       var styleObj = make_JSON(name, convType, cssObj, minzoom, maxzoom);
       print = JSON.stringify(styleObj, null, 4);
-      fs.appendFile(RESULT_PATH + '\\Result.JSON', ',\n' + print);
+      toWrite.push(',\n' + print);
     }
+
+    async.eachSeries(toWrite, function(data, cb) {
+      fs.appendFile(RESULT_PATH + '\Result.JSON', data, cb);
+    }, callback);
   } catch (err) {
     //writes a file with all the sld-files with errors
-    fs.appendFile(RESULT_PATH + '\\errorFiles.txt', file + '-' + name + '\n');
+    fs.appendFile(RESULT_PATH + '\errorFiles.txt', file + '-' + name + '\n', callback);
   }
 }
 

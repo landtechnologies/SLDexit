@@ -532,6 +532,7 @@ function convert_css_parameter(cssTag, ValidAttrTag, type, outerTag) {
   var regInt = /^\d+$/;
   var regDouble = /^[0-9]+([\,\.][0-9]+)?$/g;
   var regNumbers = /^\d+$/;
+  var hexColour = /^(?:[0-9a-fA-F]{3}){1,2}$/;
 
   try {
     var cssColorValue = cssTag['_'].split('#')[1];
@@ -540,7 +541,9 @@ function convert_css_parameter(cssTag, ValidAttrTag, type, outerTag) {
       && !(regInt.test(cssTag['_']))
       && !(regDouble.test(cssTag['_']))
       && !regLetters.test(cssColorValue)
+      && !hexColour.test(cssColorValue)
       && !regNumbers.test(cssColorValue) ) {//Check if different type of attribute
+      console.log(cssTag(cssTag['_']), ' is not recognised as a css colour. Is this correct? If not, you need to add the type to the check of css colour values');
       cssValue = (cssTag['ogc:Function'][0]['ogc:Literal'][1]);
     } else {
       cssValue = cssTag['_'];

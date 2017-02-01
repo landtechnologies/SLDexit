@@ -17,6 +17,9 @@ var sourceName = 'os_mm'; //name of source for the tiles you want the style spec
 var sourceUrl = 'https://api.landinsight.io/maps/os-mm/'; //URL to the tileJSON resource
 var type = 'vector';//vector, raster, GeoJSON ++
 
+NOTE TO SELF: NEED TO SUPPORT GETTING IMAGES FROM SPRITE SHEET FOR THOSE ITEMS THAT NEED IT
+SEE HERE: https://www.mapbox.com/mapbox-gl-style-spec/#sprite
+
 
 //-----------------------  Run script  ------------------------//
 
@@ -287,12 +290,16 @@ var parseFile = function (data, file, callback) {
     function(rules, cb) {
       var dataToWrite = rules.reduce(function(curr, rule) {
         var name = rule.Name[0];
+
         var maxzoom = scale_to_zoom(rule.MaxScaleDenominator[0]);
         var minzoom = scale_to_zoom(rule.MinScaleDenominator[0]);
+        var filterNode = rule['ogc:Filter'];
+        var filter = parseFilter(filterNode);
+
         _.each(rule, function(val, key) {
           if ((VALID_SYMBOLIZERS.indexOf(key)) > -1) {
             //Sends object, symbolizer and filename
-            curr.push([val, key, name, minzoom, maxzoom, file]);
+            curr.push([val, key, name, minzoom, maxzoom, filterNode, file]);
           }
         });
         return curr;
@@ -307,13 +314,95 @@ var parseFile = function (data, file, callback) {
   ], callback);
 };
 
+function parseFilter(filterNode) {
+  if (filterNode) {
+    function interpretKeyAndValues(filterValue, converter) {
+      var result = [converter.op];
+      var key = filterValue[converter.key];
+      if (!key) {
+        throw new Error("Error: Could not find filter key at property " + converter.key + " in filter " + filterName);
+      }   
+      result.push(key[0]);
+
+      converter.values.forEach(function(valueKey) {
+        var valContainer = filterValue[valueKey];
+        if (!valContainer) {
+          throw new Error("Error: Could not find filter value at property " + valueKey + " in filter " + filterName);
+        }
+        var val = valContainer[0];
+        try {
+          var fl = parseFloat(val);
+          val = fl;
+        } catch (ex) {}
+        try {
+          var int = parseInt(val, 10);
+          val = int;
+        } catch (ex) {}
+        result.push(val);
+      });
+      return result;
+    };
+
+    function interpretFilterList(filterValue) {
+      var result = [];
+
+      _.each(filterValue, function(val, key) {
+        var converter = filterConverters[key];
+        if (!converter) {
+          throw new Error("Error: Filter not currently supported: " + key);
+        }
+        result.push(converter.exec(val[0], converter));
+      });
+
+      return result;
+    }
+
+    function interpretComposite(filterValue, converter) {
+      var result = [converter.op];
+
+      //console.log(filterValue);
+      return result.concat(interpretFilterList(filterValue));
+    };
+
+    var filterConverters = {
+      'ogc:PropertyIsEqualTo': {
+        op: '==',
+        key: 'ogc:PropertyName',
+        values: ['ogc:Literal'],
+        exec: interpretKeyAndValues
+      },
+      'ogc:PropertyIsNotEqualTo': {
+        op: '!=',
+        key: 'ogc:PropertyName',
+        values: ['ogc:Literal'],
+        exec: interpretKeyAndValues
+      },
+      'ogc:And': {
+        op: 'all',
+        exec: interpretComposite
+      }
+    };
+
+    var filterRoot = filterNode[0];
+
+    var mapboxFilter = interpretFilterList(filterRoot);
+
+    if (mapboxFilter.length == 1) {
+      mapboxFilter = mapboxFilter[0];
+    }
+
+    return mapboxFilter;
+  }
+  return null;
+}
 
 //called for each symbolizer
 //this runs the rest of the methods through make_JSON and so on, and writes the objects to file
-function writeJSON(symbTag, type, name, minzoom, maxzoom, file, callback) {
+function writeJSON(symbTag, type, name, minzoom, maxzoom, filterNode, file, callback) {
   var errorFiles = [];
   var convType = convertType(type);
   try {
+    var filter = parseFilter(filterNode);
     var cssObj = getSymbolizersObj(symbTag, type, file);
     var toWrite = [];
     //if css-obj contains both fill and stroke, you have to split them into two layers
@@ -328,15 +417,15 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, file, callback) {
         obj[key] = cssObj[key];
         delete cssObj[key];
       }
-      var styleObj1 = make_JSON(name, convType, cssObj, minzoom, maxzoom);
-      var styleObj2 = make_JSON(name, 'line', obj, minzoom, maxzoom);
+      var styleObj1 = make_JSON(name, convType, cssObj, minzoom, maxzoom, filter);
+      var styleObj2 = make_JSON(name, 'line', obj, minzoom, maxzoom, filter);
       var print1 = JSON.stringify(styleObj1, null, 4);
       var print2 = JSON.stringify(styleObj2, null, 4);
       console.log('Writing converted');
       toWrite.push(',\n' + print1);
       toWrite.push(',\n' + print2);
     } else {
-      var styleObj = make_JSON(name, convType, cssObj, minzoom, maxzoom);
+      var styleObj = make_JSON(name, convType, cssObj, minzoom, maxzoom, filter);
       print = JSON.stringify(styleObj, null, 4);
       toWrite.push(',\n' + print);
     }
@@ -346,13 +435,13 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, file, callback) {
     }, callback);
   } catch (err) {
     //writes a file with all the sld-files with errors
-    fs.appendFile(RESULT_PATH + '\errorFiles.txt', file + '-' + name + '\n', callback);
+    fs.appendFile(RESULT_PATH + '\errorFiles.txt', file + '-' + name + '-Error:\n' + err.stack + '\n', callback);
   }
 }
 
 //this makes the layout of each mapbox-layout-object
 //name=file name, css is an object [cssName: cssValue]pairs, cssName is ie stroke, stroke-width
-function make_JSON(name, type, cssObj, minzoom, maxzoom) {
+function make_JSON(name, type, cssObj, minzoom, maxzoom, filter) {
   var attr = getPaintAndLayoutAttr(cssObj);
   var paint = attr[0];
   var layout = attr[1];
@@ -372,7 +461,8 @@ function make_JSON(name, type, cssObj, minzoom, maxzoom) {
     'minzoom': maxzoom,
     'maxzoom': minzoom,
     'layout': layout,
-    'paint': paint
+    'paint': paint,
+    filter: filter
   };
   if (!Object.keys(layout).length > 0) { //if no layout attributes
     delete styleObj['layout'];
@@ -552,7 +642,11 @@ function convert_css_parameter(cssTag, ValidAttrTag, type, outerTag) {
     if ((DIFF_ATTR.indexOf(cssName)) > -1
       && !(regInt.test(cssTag['_']))
       && !(regDouble.test(cssTag['_']))) {//Check if different type of attribute
-      cssValue = (cssTag['ogc:Function'][0]['ogc:Literal'][1]);
+      cssValue = cssTag['ogc:Function'] && cssTag['ogc:Function'][0]['ogc:Literal'] && cssTag['ogc:Function'][0]['ogc:Literal'][1];
+      if (!cssValue) {
+        console.log("Warning: Could not get css value for property: " + cssName + ". XML initial css tag: ");
+        console.log(cssTag);
+      }
     } else {
       cssValue = cssTag['_'];
     }

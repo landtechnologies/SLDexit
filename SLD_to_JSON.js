@@ -17,9 +17,6 @@ var sourceName = 'os_mm'; //name of source for the tiles you want the style spec
 var sourceUrl = 'https://api.landinsight.io/maps/os-mm/'; //URL to the tileJSON resource
 var type = 'vector';//vector, raster, GeoJSON ++
 
-NOTE TO SELF: NEED TO SUPPORT GETTING IMAGES FROM SPRITE SHEET FOR THOSE ITEMS THAT NEED IT
-SEE HERE: https://www.mapbox.com/mapbox-gl-style-spec/#sprite
-
 
 //-----------------------  Run script  ------------------------//
 

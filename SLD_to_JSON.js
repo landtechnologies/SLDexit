@@ -9,25 +9,55 @@ var parser = new xml2js.Parser();
 var nrToParse = 1; //nr to check if last file is converted - if so the end of json file is written!
 var nrParsed = 0; //Nr of parsed files so far
 
+//--------------------MISSING PARTS-------------------------------
+/*
+Doesn't support:
+ - Relative fields, such as:
+  <Rotation>-
+    <ogc:Mul>
+      <ogc:PropertyName>orientation</ogc:PropertyName>
+      <ogc:Literal>0.1</ogc:Literal>
+    </ogc:Mul>
+  </Rotation>
+  Maybe this isn't an issue...
+
+ - Need to fix how source and source layer are set
+
+ - Anchor points??
+
+*/
 
 //-----------------------TODO-------------------------------------
 //ADD YOUR SPECIFIC INFO HERE BEFORE RUNNING THE CODE:
-var styleSpecName = 'MapboxGLStyle2';//choose the name you want
+var styleSpecName = 'os_mm';//choose the name you want
 var sourceName = 'os_mm'; //name of source for the tiles you want the style specification to apply for
-var sourceUrl = 'https://api.landinsight.io/maps/os-mm/'; //URL to the tileJSON resource
+//var sourceUrl = 'https://api.landinsight.io/maps/os-mm/'; //URL to the tileJSON resource
+var sourceUrl = '/maps/os-mm/tile';
 var type = 'vector';//vector, raster, GeoJSON ++
 
+//ENTER URL HERE
+var SPRITE = "/maps/os-mm/sprite"; //e.g. https://www.mapbox.com/mapbox-gl-styles/sprites/sprite
+
+//add path for directory where all files you want to convert are placed
+//ONLY READS FILES WITH THE .sld EXTENSION
+//var DIRECTORY_PATH = '~/LandTech/os-mm-styles';
+//var DIRECTORY_PATH = 'exampleMultipleLayers';
+var DIRECTORY_PATH = '../os-mm-styles/backdrop';
+
+var SOURCE_LAYER_FILE_REGEX = {
+  os_mm_topo_boundary_line: /boundaryline/i,
+  os_mm_topo_cartographic_symbol: /cartographicsymbol/i,
+  os_mm_topo_cartographic_text: /cartographictext/i,
+  os_mm_topo_topographic_area: /topographicarea/i,
+  os_mm_topo_topographic_line: /topographicline/i,
+  os_mm_topo_topographic_point: /topographicpoint/i
+};
 
 //-----------------------  Run script  ------------------------//
 
 //You can run the script either from one file or a directory of files.
 //Comment out the one you don't want
 
-//add path for directory where all files you want to convert are placed
-//ONLY READS FILES WITH THE .sld EXTENSION
-//var DIRECTORY_PATH = '~/LandTech/os-mm-styles';
-var DIRECTORY_PATH = '../os-mm-styles-test';
-//var DIRECTORY_PATH = 'exampleMultipleLayers';
 
 var finish = function(err) {
   console.log("Finished");
@@ -122,7 +152,33 @@ var CONV_ICON_IMG = {
   //, 'FKB_MastTele':,'FKB_Mast_Telesmast'
 };
 
+
+
+//Since you can only have one sprite sheet, you will have to bake default images (lie circle.svg)
+//into your spritesheet if you have a custom one
+
+//NOTE: Don't use this, support circle layer types instead
+var WELL_KNOWN_MARK_TO_IMAGE = {
+  
+};
+
 var FILES_WRITTEN = [];
+
+function parseIntOrFloat(val) {
+  var parsedVal;
+  try {
+    var fl = parseFloat(val);
+    parsedVal = fl;
+  } catch (ex) {}
+  if (parsedVal == null) {
+    try {
+      var int = parseInt(val, 10);
+      val = int;
+    } catch (ex) {}
+    return val;
+  }
+  return parsedVal;
+}
 
 
 //translate zoom-scale to zoom-level
@@ -245,7 +301,7 @@ function parse_sld_to_rules_tag(file, callback) {
 }
 
 function writeStartOfJSON(callback) {
-  var top = '{ "version": 7, "name": "' + styleSpecName + '", "sources": { "' + sourceName + '": { "type": "vector", "url": "' + sourceUrl + '" } }, "glyphs": "mapbox://fontstack/{fontstack}/{range}.pbf", "sprite": "https://www.mapbox.com/mapbox-gl-styles/sprites/sprite", "layers": [ { "id": "background", "type": "background", "paint": { "background-color": "rgb(237, 234, 235)" } }';
+  var top = '{ "version": 7, "name": "' + styleSpecName + '", "sources": { "' + sourceName + '": { "type": "vector", "url": "' + sourceUrl + '" } }, "glyphs": "mapbox://fontstack/{fontstack}/{range}.pbf", "sprite": "' + SPRITE + '", "layers": [ { "id": "background", "type": "background", "paint": { "background-color": "rgb(237, 234, 235)" } }';
   //  var top = '{ "version": 7, "name": "MapboxGLStyle2", "sources": { "norkart": { "type": "vector", "url": "mapbox://andersob.3ukdquxr" } }, "glyphs": "mapbox://fontstack/{fontstack}/{range}.pbf", "sprite": "https://www.mapbox.com/mapbox-gl-styles/sprites/sprite", "layers": [ { "id": "background", "type": "background", "paint": { "background-color": "rgb(237, 234, 235)" } }';
   async.waterfall([
     function(cb) {
@@ -268,6 +324,7 @@ function writeEndOfJSON(callback) {
 var parseFile = function (data, file, callback) {
   async.waterfall([
     function(cb) {
+      console.log("Parsing file: " + file);
       parser.parseString(data, function (err, result) {
         var FeatureTypeStyle = result.StyledLayerDescriptor.NamedLayer[0].UserStyle[0].FeatureTypeStyle;
         var rulesArr = [];
@@ -326,15 +383,8 @@ function parseFilter(filterNode) {
         if (!valContainer) {
           throw new Error("Error: Could not find filter value at property " + valueKey + " in filter " + filterName);
         }
-        var val = valContainer[0];
-        try {
-          var fl = parseFloat(val);
-          val = fl;
-        } catch (ex) {}
-        try {
-          var int = parseInt(val, 10);
-          val = int;
-        } catch (ex) {}
+        var val = parseIntOrFloat(valContainer[0]);
+        
         result.push(val);
       });
       return result;
@@ -397,11 +447,26 @@ function parseFilter(filterNode) {
 //this runs the rest of the methods through make_JSON and so on, and writes the objects to file
 function writeJSON(symbTag, type, name, minzoom, maxzoom, filterNode, file, callback) {
   var errorFiles = [];
-  var convType = convertType(type);
+  var convType = convertType(type, symbTag);
   try {
     var filter = parseFilter(filterNode);
-    var cssObj = getSymbolizersObj(symbTag, type, file);
+    var cssObj = getSymbolizersObj(symbTag, type, convType, file);
     var toWrite = [];
+
+    var sourceLayer = null;
+
+    _.find(SOURCE_LAYER_FILE_REGEX, function(regex, layerName) {
+      if (regex.text(file)) {
+        sourceLayer = layerName;
+        return true;
+      }
+      return false;
+    });
+
+    if (!sourceLayer) {
+      console.log("Warning: File '" + file + "' did not match any regexes for identification of source layer. Check SOURCE_LAYER_FILE_REGEX at the top of the file if this should not be the case.");
+    }
+
     //if css-obj contains both fill and stroke, you have to split them into two layers
     if (cssObj['fill-color'] !== undefined && cssObj['line-color'] !== undefined) {
       var attPos = (Object.keys(cssObj)).indexOf('line-color');
@@ -414,15 +479,15 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, filterNode, file, call
         obj[key] = cssObj[key];
         delete cssObj[key];
       }
-      var styleObj1 = make_JSON(name, convType, cssObj, minzoom, maxzoom, filter);
-      var styleObj2 = make_JSON(name, 'line', obj, minzoom, maxzoom, filter);
+      var styleObj1 = make_JSON(sourceLayer, name, convType, cssObj, minzoom, maxzoom, filter);
+      var styleObj2 = make_JSON(sourceLayer, name, 'line', obj, minzoom, maxzoom, filter);
       var print1 = JSON.stringify(styleObj1, null, 4);
       var print2 = JSON.stringify(styleObj2, null, 4);
       console.log('Writing converted');
       toWrite.push(',\n' + print1);
       toWrite.push(',\n' + print2);
     } else {
-      var styleObj = make_JSON(name, convType, cssObj, minzoom, maxzoom, filter);
+      var styleObj = make_JSON(sourceLayer, name, convType, cssObj, minzoom, maxzoom, filter);
       print = JSON.stringify(styleObj, null, 4);
       toWrite.push(',\n' + print);
     }
@@ -438,7 +503,7 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, filterNode, file, call
 
 //this makes the layout of each mapbox-layout-object
 //name=file name, css is an object [cssName: cssValue]pairs, cssName is ie stroke, stroke-width
-function make_JSON(name, type, cssObj, minzoom, maxzoom, filter) {
+function make_JSON(sourceLayer, name, type, cssObj, minzoom, maxzoom, filter) {
   var attr = getPaintAndLayoutAttr(cssObj);
   var paint = attr[0];
   var layout = attr[1];
@@ -453,8 +518,8 @@ function make_JSON(name, type, cssObj, minzoom, maxzoom, filter) {
   var styleObj = {
     'id': type + '-' + name,
     'type': type,
-    'source': 'norkart',
-    'source-layer': name,
+    'source': sourceName,
+    'source-layer': sourceLayer,
     'minzoom': maxzoom,
     'maxzoom': minzoom,
     'layout': layout,
@@ -468,7 +533,7 @@ function make_JSON(name, type, cssObj, minzoom, maxzoom, filter) {
 }
 
 
-function getSymbolizersObj(symbTag, type, file) {
+function getSymbolizersObj(symbTag, type, convertedType, file) {
   //have to check all taggs in symbolizer
   var i;
   var cssObj = {};
@@ -479,7 +544,7 @@ function getSymbolizersObj(symbTag, type, file) {
        //if values are not in the regular place
       if (DIFF_ATTR_TAG.indexOf(tagName) > -1 ||
           ((tagName === 'Fill') && symbTag[0].Fill[0].GraphicFill !== undefined)) {
-        var obj = getObjFromDiffAttr(tagName, type, symbTag, file);
+        var obj = getObjFromDiffAttr(tagName, type, convertedType, symbTag, file);
         for (var key in obj) {
           cssObj[key] = obj[key];
         }
@@ -518,7 +583,7 @@ function getCssParameters(symbTag, validAttrTag, type, outerTag) {
 
 //gets called if attribute-values are not placed as the rest and therefor needs
 //a different method the get the css-value
-function getObjFromDiffAttr(tagName, type, symbTag, file) {
+function getObjFromDiffAttr(tagName, type, convertedType, symbTag, file) {
   var obj = {};
   if (tagName === 'Label') {
     obj = getLabelObj(tagName, type, symbTag, obj);
@@ -529,7 +594,7 @@ function getObjFromDiffAttr(tagName, type, symbTag, file) {
   } else if (tagName === 'Geometry') {
     obj = getGeometryObj(symbTag, obj);
   } else if (tagName === 'Graphic') {
-    obj = getGraphicObj(file, symbTag, type, obj);
+    obj = getGraphicObj(file, symbTag, type, convertedType, obj);
   }
   return obj;
 }
@@ -570,49 +635,57 @@ function getGeometryObj(symbTag, obj) {
   }
   return obj;
 }
-function getGraphicObj(file, symbTag, type, obj) {
-  var fillColor;
+function getGraphicObj(file, symbTag, type, convertedType, obj) {
   try {
-    fillColor = symbTag[0].Graphic[0].Mark[0].Fill[0].CssParameter[0]['ogc:Function'][0]['ogc:Literal'][1];
-    var color = '#' + fillColor;
-    var regInteger = /^\d+$/;
-    if (!regInteger.test(fillColor)) {
-      //console.log('Different graphic tag: '+fillColor+ ' from file: '+ file);
-    } else {
-      obj['icon-color'] = color;
-    }
+    var cssParamTag = symbTag[0].Graphic[0].Mark[0].Fill[0].CssParameter[0];
+
+    obj['icon-color'] = getCssParameterValue(cssParamTag);
   } catch (err) {
-    console.log('Could not set fill color for graphic tag in file: ' + file);
   }
   //Sets size
   try {
     var size = symbTag[0].Graphic[0].Size[0];
-      obj['icon-size'] = parseInt(size, 10);
+    obj['icon-size'] = parseIntOrFloat(size);
   } catch (err) {
       console.log('Size does not exist in this graphic-tag');
   }
-  var img = getIconImage(file);
-  if (img !== undefined) {
-    obj['icon-image'] = img;
-  } else {
-    obj['icon-image'] = 'circle-12';
+  if (convertedType !== 'circle') {
+    obj['icon-image'] = getIconImage(file, symbTag);
+  }
+
+  if (!obj['icon-image'] && !obj['icon-color'] && convertedType !== 'circle') {
+    console.log("Warning: Graphic doesn't have a colour or an image");
+  } else if (convertedType === 'circle' && !obj['icon-color']) {
+    console.log("Warning: Could not get colour for circle");
   }
   return obj;
 }
 
-function getIconImage(file) {
+function getIconImage(file, symbTag) {
+  var img;
+  var graphic;
   try {
-    var img = CONV_ICON_IMG[file];
+    graphic = symbTag[0].Graphic[0];
+    if (graphic.ExternalGraphic) {
+      img = graphic.ExternalGraphic[0].OnlineResource[0].$['xlink:href'];
+      img = path.basename(img).split('.')[0];
+    } else if (graphic.Mark) {
+      var wellKnownName = graphic.Mark[0].WellKnownName[0];
+      img = WELL_KNOWN_MARK_TO_IMAGE[wellKnownName];
+      if (!img) {
+        console.log("Warning: Well known mark not supported: " + wellKnownName + ". File: " + file);
+      }
+    }
   } catch (err) {
-    console.log('Unknown icon');
     img = undefined;
+    if (graphic) {
+      console.log("Warning: Graphic object exists, but could not extract an image. File: " + file);
+    }
   }
   return img;
 }
 
-//returns an array with css parameter name and value, correctly converted
-//validAttrTag=name of outer tag, example stroke, fill, label
-function convert_css_parameter(cssTag, ValidAttrTag, type, outerTag) {
+function getCssParameterValue(cssTag) {
   var cssName = cssTag['$'].name;
   var cssValue;
   var regLetters = /^[a-zA-Z]+$/;
@@ -648,6 +721,15 @@ function convert_css_parameter(cssTag, ValidAttrTag, type, outerTag) {
       cssValue = cssTag['_'];
     }
   }
+  return cssValue;
+}
+
+//returns an array with css parameter name and value, correctly converted
+//validAttrTag=name of outer tag, example stroke, fill, label
+function convert_css_parameter(cssTag, ValidAttrTag, type, outerTag) {
+  var cssName = cssTag['$'].name;
+  var cssValue = getCssParameterValue(cssTag);
+  
   var convertedCssName = convertCssName(cssName, ValidAttrTag, type, outerTag);
   var convertedCssValue = convertCssValue(cssValue, cssName);
   return [convertedCssName, convertedCssValue];
@@ -723,12 +805,26 @@ function convertCssName(cssName, validAttrTag, type, outerTag) {
   }
 }
 
-function convertType(type) {
-  try {
-    return CONV_TYPE[type];
-  } catch (err) {
-    console.log('could not convert the type: ' + type);
+function convertType(type, node) {
+  //console.log(node);
+  var type = CONV_TYPE[type];
+  if (!type) {
+    console.log('warning could not convert the type: ' + type);
   }
+
+  if (type === 'symbol') {
+    try {
+      var graphicParent = _.find(node, function(child) {
+        return !!child.Graphic;
+      });
+      //console.log(graphicParent.Graphic[0].Mark[0].WellKnownName[0]);
+      if (graphicParent.Graphic[0].Mark[0].WellKnownName[0] === 'circle') {
+        type = 'circle';
+        //console.log(type);
+      }
+    } catch (ex) {}
+  }
+  return type;
 }
 
 //Makes paint object og layout object

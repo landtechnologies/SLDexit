@@ -42,7 +42,7 @@ var SPRITE = "/maps/os-mm/sprite"; //e.g. https://www.mapbox.com/mapbox-gl-style
 //ONLY READS FILES WITH THE .sld EXTENSION
 //var DIRECTORY_PATH = '~/LandTech/os-mm-styles';
 //var DIRECTORY_PATH = 'exampleMultipleLayers';
-var DIRECTORY_PATH = '../os-mm-styles/backdrop';
+var DIRECTORY_PATH = '../os-mm-styles/standard';
 
 var SOURCE_LAYER_FILE_REGEX = {
   os_mm_topo_boundary_line: /boundaryline/i,
@@ -456,7 +456,7 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, filterNode, file, call
     var sourceLayer = null;
 
     _.find(SOURCE_LAYER_FILE_REGEX, function(regex, layerName) {
-      if (regex.text(file)) {
+      if (regex.test(file)) {
         sourceLayer = layerName;
         return true;
       }
@@ -496,6 +496,7 @@ function writeJSON(symbTag, type, name, minzoom, maxzoom, filterNode, file, call
       fs.appendFile(RESULT_PATH + '\Result.JSON', data, cb);
     }, callback);
   } catch (err) {
+    console.log("Error: Failed to parse file. See errorFiles.txt for more information");
     //writes a file with all the sld-files with errors
     fs.appendFile(RESULT_PATH + '\errorFiles.txt', file + '-' + name + '-Error:\n' + err.stack + '\n', callback);
   }
